@@ -1,0 +1,175 @@
+---
+title: "Concentration of S&P 500 index"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = TRUE, echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+In this data challenge we study how concentrated the S&P 500 is among its constituent companies.
+
+1. The S&P 500 (Standard & Poor's 500) is a stock market index that tracks the performance of 500 of the largest publicly traded companies in the United States.
+2. It covers roughly 80% of the total value of the U.S. stock market.
+3. It is a market-capitalization-weighted index. Larger companies have a much bigger impact on its value than smaller components.
+
+We will use:
+
+```{r}
+library(tidyverse)
+library(tidyquant)
+library(ineq)
+```
+
+The three packages have different roles:
+
+```text
+tidyquant    retrieve the S&P 500 constituents and weights
+tidyverse    manipulate and visualize the data
+ineq         calculate the Lorenz curve and Gini coefficient
+```
+
+Our main questions are:
+
+1. How unequal are the company weights in the S&P 500?
+2. How much of the index is represented by its largest companies?
+3. What does the Lorenz curve tell us about concentration?
+4. What is the Gini coefficient of the S&P 500 weights?
+
+## 1. Get the S&P 500 constituents and their weights
+
+`tq_index()` pulls the current list of S&P 500 constituents together with each
+company's index weight directly from an online source.
+
+```{r}
+sp500 <- tq_index("SP500")
+
+sp500 <- sp500 %>%
+  filter(!is.na(weight)) %>%
+  arrange(desc(weight))
+
+glimpse(sp500)
+```
+
+## 2. Summary statistics of the weights
+
+Before looking at inequality measures, let's get a feel for the distribution
+of weights: the mean, median, min, max, and how many companies make up the
+index.
+
+```{r}
+sp500 %>%
+  summarise(
+    n_companies = n(),
+    total_weight = sum(weight),
+    mean_weight = mean(weight),
+    median_weight = median(weight),
+    min_weight = min(weight),
+    max_weight = max(weight)
+  )
+```
+
+Weight is expressed as a fraction (or percent, depending on the source) of
+the total index value. If `total_weight` is close to 1 (or 100), that
+confirms weights sum to the whole index.
+
+## 3. The top 10 companies by weight
+
+Since the index is market-cap weighted, a handful of giant companies should
+account for a disproportionate share of the index value.
+
+```{r}
+top10 <- sp500 %>%
+  slice_max(weight, n = 10) %>%
+  select(symbol, company, weight)
+
+top10
+```
+
+```{r}
+ggplot(top10, aes(x = reorder(symbol, weight), y = weight)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Top 10 S&P 500 companies by index weight",
+    x = NULL,
+    y = "Weight"
+  ) +
+  theme_minimal()
+```
+
+## 4. Cumulative weight: how much of the index is in the top N companies?
+
+We sort companies by weight (largest first) and compute the cumulative sum.
+This tells us, e.g., what fraction of the index value the top 10, top 50, or
+top 100 companies represent.
+
+```{r}
+sp500_cum <- sp500 %>%
+  arrange(desc(weight)) %>%
+  mutate(
+    rank = row_number(),
+    cum_weight = cumsum(weight) / sum(weight)
+  )
+
+sp500_cum %>%
+  filter(rank %in% c(1, 5, 10, 25, 50, 100, 200, 500)) %>%
+  select(rank, cum_weight)
+```
+
+```{r}
+ggplot(sp500_cum, aes(x = rank, y = cum_weight)) +
+  geom_line(color = "darkred", linewidth = 1) +
+  labs(
+    title = "Cumulative share of S&P 500 index value",
+    x = "Number of largest companies included",
+    y = "Cumulative weight (fraction of index)"
+  ) +
+  theme_minimal()
+```
+
+## 5. The Lorenz curve
+
+The Lorenz curve plots the cumulative share of total weight held by the
+bottom X% of companies (ordered from smallest to largest). A perfectly equal
+index (every company has the same weight) would produce a straight 45-degree
+line. The more the curve bows below that line, the more concentrated the
+index is.
+
+```{r}
+Lc_sp500 <- Lc(sp500$weight)
+
+plot(Lc_sp500,
+     main = "Lorenz Curve of S&P 500 Weights",
+     col = "darkblue", lwd = 2)
+```
+
+## 6. The Gini coefficient
+
+The Gini coefficient summarizes the Lorenz curve in a single number between 0
+and 1: 0 means perfect equality (every company has the same weight), 1 means
+maximal inequality (one company has all the weight).
+
+```{r}
+gini_sp500 <- Gini(sp500$weight)
+gini_sp500
+```
+
+## 7. Conclusions
+
+```{r}
+cat(
+  "Number of companies in the index:", nrow(sp500), "\n",
+  "Top 10 companies account for:", scales::percent(sum(top10$weight)), "of the index\n",
+  "Gini coefficient of weights:", round(gini_sp500, 3), "\n"
+)
+```
+
+- The Gini coefficient (close to 1 = high inequality, close to 0 = low
+  inequality) tells us quantitatively how concentrated the index is.
+- The cumulative weight table/plot shows that a relatively small number of
+  "mega-cap" companies account for a large share of the index's total value,
+  even though the index nominally has ~500 constituents.
+- The Lorenz curve visualizes this same imbalance: the area between the
+  curve and the 45-degree line of perfect equality is proportional to the
+  Gini coefficient.
